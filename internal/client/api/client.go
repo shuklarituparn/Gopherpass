@@ -93,6 +93,22 @@ func (c *Client) getContext() (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
+
+func (c *Client) requireAuth() error {
+	if c.token == "" {
+		return ErrNotAuthenticated
+	}
+	return nil
+}
+
+
+func (c *Client) withAuth(operation func() error) error {
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	return operation()
+}
+
 func (c *Client) Register(login, password string) (*models.RegisterResponse, error) {
 	ctx, cancel := c.getContext()
 	defer cancel()
@@ -135,8 +151,8 @@ func (c *Client) Login(login, password string) (*models.AuthResponse, error) {
 }
 
 func (c *Client) CreateSecret(name string, dataType models.DataType, encryptedData []byte, metadata string) (*models.Secret, error) {
-	if c.token == "" {
-		return nil, ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := c.getContext()
@@ -156,8 +172,8 @@ func (c *Client) CreateSecret(name string, dataType models.DataType, encryptedDa
 }
 
 func (c *Client) GetSecret(id string) (*models.Secret, error) {
-	if c.token == "" {
-		return nil, ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := c.getContext()
@@ -174,8 +190,8 @@ func (c *Client) GetSecret(id string) (*models.Secret, error) {
 }
 
 func (c *Client) ListSecrets(dataType *models.DataType) ([]models.Secret, error) {
-	if c.token == "" {
-		return nil, ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := c.getContext()
@@ -200,8 +216,8 @@ func (c *Client) ListSecrets(dataType *models.DataType) ([]models.Secret, error)
 }
 
 func (c *Client) UpdateSecret(secret *models.Secret) (*models.Secret, error) {
-	if c.token == "" {
-		return nil, ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := c.getContext()
@@ -222,8 +238,8 @@ func (c *Client) UpdateSecret(secret *models.Secret) (*models.Secret, error) {
 }
 
 func (c *Client) DeleteSecret(id string) error {
-	if c.token == "" {
-		return ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return err
 	}
 
 	ctx, cancel := c.getContext()
@@ -236,8 +252,8 @@ func (c *Client) DeleteSecret(id string) error {
 }
 
 func (c *Client) Sync(lastSyncTime time.Time, localChanges []models.Secret) (*models.SyncResponse, error) {
-	if c.token == "" {
-		return nil, ErrNotAuthenticated
+	if err := c.requireAuth(); err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := c.getContext()

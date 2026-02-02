@@ -1,9 +1,14 @@
 package commands
 
 import (
+	"context"
 	"fmt"
+	"sync"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/shuklarituparn/Gopherpass/internal/models"
 )
 
 var syncCmd = &cobra.Command{
@@ -18,10 +23,14 @@ func init() {
 	syncCmd.Flags().BoolP("force", "f", false, "Force full sync (ignore last sync time)")
 }
 
+const syncConcurrencyLimit = 10
+
 func runSync(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	force, _ := cmd.Flags().GetBool("force")
 
@@ -49,28 +58,20 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	updated := 0
-	for _, secret := range resp.UpdatedSecrets {
-		if err := app.Storage.UpsertSecret(&secret); err != nil {
-			fmt.Printf("Warning: failed to update secret %s: %v\n", secret.ID, err)
-			continue
-		}
-		updated++
-	}
+	updated, updateWarnings := processUpdatesParallel(cmd.Context(), app, resp.UpdatedSecrets)
 
-	deleted := 0
-	for _, id := range resp.DeletedIDs {
-		if err := app.Storage.DeleteSecretPermanently(id); err != nil {
-			fmt.Printf("Warning: failed to delete secret %s: %v\n", id, err)
-			continue
-		}
-		deleted++
-	}
+	deleted, deleteWarnings := processDeletionsParallel(cmd.Context(), app, resp.DeletedIDs)
 
-	for _, secret := range localChanges {
-		if err := app.Storage.MarkAsSynced(secret.ID); err != nil {
-			fmt.Printf("Warning: failed to mark secret %s as synced: %v\n", secret.ID, err)
-		}
+	markWarnings := markSyncedParallel(cmd.Context(), app, localChanges)
+
+	for _, w := range updateWarnings {
+		fmt.Printf("Warning: %s\n", w)
+	}
+	for _, w := range deleteWarnings {
+		fmt.Printf("Warning: %s\n", w)
+	}
+	for _, w := range markWarnings {
+		fmt.Printf("Warning: %s\n", w)
 	}
 
 	if err := app.Storage.SetLastSyncTime(resp.ServerTime); err != nil {
@@ -92,4 +93,104 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+
+func processUpdatesParallel(ctx context.Context, app *App, secrets []models.Secret) (int, []string) {
+	if len(secrets) == 0 {
+		return 0, nil
+	}
+
+	var (
+		updated  int
+		mu       sync.Mutex
+		warnings []string
+	)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(syncConcurrencyLimit)
+
+	for _, secret := range secrets {
+		secret := secret
+		g.Go(func() error {
+			if err := app.Storage.UpsertSecret(&secret); err != nil {
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("failed to update secret %s: %v", secret.ID, err))
+				mu.Unlock()
+				return nil 
+			}
+			mu.Lock()
+			updated++
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+	return updated, warnings
+}
+
+
+func processDeletionsParallel(ctx context.Context, app *App, ids []string) (int, []string) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	var (
+		deleted  int
+		mu       sync.Mutex
+		warnings []string
+	)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(syncConcurrencyLimit)
+
+	for _, id := range ids {
+		id := id 
+		g.Go(func() error {
+			if err := app.Storage.DeleteSecretPermanently(id); err != nil {
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("failed to delete secret %s: %v", id, err))
+				mu.Unlock()
+				return nil 
+			}
+			mu.Lock()
+			deleted++
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	_ = g.Wait() 
+	return deleted, warnings
+}
+
+
+func markSyncedParallel(ctx context.Context, app *App, secrets []models.Secret) []string {
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	var (
+		mu       sync.Mutex
+		warnings []string
+	)
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(syncConcurrencyLimit)
+
+	for _, secret := range secrets {
+		secret := secret
+		g.Go(func() error {
+			if err := app.Storage.MarkAsSynced(secret.ID); err != nil {
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("failed to mark secret %s as synced: %v", secret.ID, err))
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+	return warnings
 }

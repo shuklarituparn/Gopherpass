@@ -40,6 +40,11 @@ func init() {
 }
 
 func runConfigShow(cmd *cobra.Command, args []string) error {
+	app := getApp(cmd)
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
 	fmt.Println("GophKeeper Configuration:")
 	fmt.Println()
 	fmt.Printf("  Server Address:  %s\n", app.Config.ServerAddress)
@@ -68,6 +73,11 @@ func runConfigShow(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigSet(cmd *cobra.Command, args []string) error {
+	app := getApp(cmd)
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
 	key := args[0]
 	value := args[1]
 
@@ -107,6 +117,9 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigPath(cmd *cobra.Command, args []string) {
+	app := getApp(cmd)
 	fmt.Printf("Config file: %s\n", config.GetConfigPath())
-	fmt.Printf("Database:    %s\n", app.Config.DatabasePath)
+	if app != nil && app.Config != nil {
+		fmt.Printf("Database:    %s\n", app.Config.DatabasePath)
+	}
 }

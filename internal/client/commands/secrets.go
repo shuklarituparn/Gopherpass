@@ -100,12 +100,14 @@ func init() {
 }
 
 func runAddPassword(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
-	if err := requireEncryptionKey(); err != nil {
+	if err := requireEncryptionKey(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -170,12 +172,14 @@ func runAddPassword(cmd *cobra.Command, args []string) error {
 }
 
 func runAddText(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
-	if err := requireEncryptionKey(); err != nil {
+	if err := requireEncryptionKey(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -233,12 +237,14 @@ func runAddText(cmd *cobra.Command, args []string) error {
 }
 
 func runAddCard(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
-	if err := requireEncryptionKey(); err != nil {
+	if err := requireEncryptionKey(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -317,12 +323,14 @@ func runAddCard(cmd *cobra.Command, args []string) error {
 }
 
 func runAddFile(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
-	if err := requireEncryptionKey(); err != nil {
+	if err := requireEncryptionKey(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	filepath := args[0]
 
@@ -342,13 +350,11 @@ func runAddFile(cmd *cobra.Command, args []string) error {
 
 	notes, _ := cmd.Flags().GetString("notes")
 
-	// Create binary data
 	data := &models.BinaryData{
 		Data:     fileData,
 		FileName: name,
 	}
 
-	// Encrypt data
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal data: %w", err)
@@ -376,12 +382,14 @@ func runAddFile(cmd *cobra.Command, args []string) error {
 }
 
 func runGet(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
-	if err := requireEncryptionKey(); err != nil {
+	if err := requireEncryptionKey(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	id := args[0]
 
@@ -447,9 +455,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	typeFilter, _ := cmd.Flags().GetString("type")
 
@@ -496,9 +506,11 @@ func runList(cmd *cobra.Command, args []string) error {
 }
 
 func runDelete(cmd *cobra.Command, args []string) error {
-	if err := requireAuth(); err != nil {
+	if err := requireAuth(cmd); err != nil {
 		return err
 	}
+
+	app := getApp(cmd)
 
 	id := args[0]
 	force, _ := cmd.Flags().GetBool("force")

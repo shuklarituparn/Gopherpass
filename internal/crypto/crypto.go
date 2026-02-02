@@ -16,18 +16,65 @@ var ErrInvalidCiphertext = errors.New("ciphertext is too short or invalid")
 
 var ErrEmptyKey = errors.New("encryption key cannot be empty")
 
+var ErrKeyTooShort = errors.New("encryption key is too short")
+
 type Encryptor struct {
-	key []byte
+	key       []byte
+	minKeyLen int
+}
+
+type EncryptorOption func(*Encryptor) error
+
+
+func WithMinKeyLength(length int) EncryptorOption {
+	return func(e *Encryptor) error {
+		if length < 0 {
+			length = 0
+		}
+		e.minKeyLen = length
+		return nil
+	}
 }
 
 
-func NewEncryptor(key string) (*Encryptor, error) {
+func WithRawKey(key []byte) EncryptorOption {
+	return func(e *Encryptor) error {
+		if len(key) != 32 {
+			return errors.New("raw key must be exactly 32 bytes")
+		}
+		e.key = make([]byte, 32)
+		copy(e.key, key)
+		return nil
+	}
+}
+
+
+func NewEncryptor(key string, opts ...EncryptorOption) (*Encryptor, error) {
+	e := &Encryptor{
+		minKeyLen: 0,
+	}
+
+	for _, opt := range opts {
+		if err := opt(e); err != nil {
+			return nil, err
+		}
+	}
+
+	if e.key != nil {
+		return e, nil
+	}
+
 	if key == "" {
 		return nil, ErrEmptyKey
 	}
 
+	if e.minKeyLen > 0 && len(key) < e.minKeyLen {
+		return nil, ErrKeyTooShort
+	}
+
 	hash := sha256.Sum256([]byte(key))
-	return &Encryptor{key: hash[:]}, nil
+	e.key = hash[:]
+	return e, nil
 }
 
 
@@ -125,7 +172,6 @@ func HashPassword(password string) (string, error) {
 	}
 	return string(hash), nil
 }
-
 
 func CheckPassword(password, hash string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))

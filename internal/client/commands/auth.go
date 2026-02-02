@@ -43,6 +43,11 @@ func init() {
 }
 
 func runRegister(cmd *cobra.Command, args []string) error {
+	app := getApp(cmd)
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
 	login, _ := cmd.Flags().GetString("login")
 	password, _ := cmd.Flags().GetString("password")
 
@@ -88,7 +93,7 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	if err := setEncryptionKey(password); err != nil {
+	if err := setEncryptionKey(cmd, password); err != nil {
 		return fmt.Errorf("failed to set encryption key: %w", err)
 	}
 
@@ -97,6 +102,11 @@ func runRegister(cmd *cobra.Command, args []string) error {
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
+	app := getApp(cmd)
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
 	login, _ := cmd.Flags().GetString("login")
 	password, _ := cmd.Flags().GetString("password")
 
@@ -131,7 +141,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	if err := setEncryptionKey(password); err != nil {
+	if err := setEncryptionKey(cmd, password); err != nil {
 		return fmt.Errorf("failed to set encryption key: %w", err)
 	}
 
@@ -141,6 +151,11 @@ func runLogin(cmd *cobra.Command, args []string) error {
 }
 
 func runLogout(cmd *cobra.Command, args []string) error {
+	app := getApp(cmd)
+	if app == nil {
+		return fmt.Errorf("application not initialized")
+	}
+
 	if !app.Config.IsAuthenticated() {
 		fmt.Println("Not logged in")
 		return nil

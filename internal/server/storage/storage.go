@@ -20,22 +20,35 @@ var (
 	ErrDatabaseError    = errors.New("database error")
 )
 
-type Storage interface {
+type UserRepository interface {
 	CreateUser(ctx context.Context, user *models.User) error
 	GetUserByLogin(ctx context.Context, login string) (*models.User, error)
 	GetUserByID(ctx context.Context, id int64) (*models.User, error)
+}
 
+type SecretRepository interface {
 	CreateSecret(ctx context.Context, secret *models.Secret) error
 	GetSecret(ctx context.Context, userID int64, secretID string) (*models.Secret, error)
 	GetSecretsByUser(ctx context.Context, userID int64) ([]models.Secret, error)
-	GetSecretsModifiedSince(ctx context.Context, userID int64, since time.Time) ([]models.Secret, error)
 	UpdateSecret(ctx context.Context, secret *models.Secret) error
 	DeleteSecret(ctx context.Context, userID int64, secretID string) error
+}
 
+type SyncRepository interface {
+	GetSecretsModifiedSince(ctx context.Context, userID int64, since time.Time) ([]models.Secret, error)
 	GetDeletedSecrets(ctx context.Context, userID int64, since time.Time) ([]string, error)
+}
 
+type HealthChecker interface {
 	Ping(ctx context.Context) error
 	Close() error
+}
+
+type Storage interface {
+	UserRepository
+	SecretRepository
+	SyncRepository
+	HealthChecker
 }
 
 type PostgresStorage struct {
