@@ -102,7 +102,16 @@ func (c *Client) requireAuth() error {
 }
 
 
-func (c *Client) withAuth(operation func() error) error {
+func withAuth[T any](c *Client, operation func() (T, error)) (T, error) {
+	var zero T
+	if err := c.requireAuth(); err != nil {
+		return zero, err
+	}
+	return operation()
+}
+
+
+func withAuthNoResult(c *Client, operation func() error) error {
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
@@ -151,138 +160,126 @@ func (c *Client) Login(login, password string) (*models.AuthResponse, error) {
 }
 
 func (c *Client) CreateSecret(name string, dataType models.DataType, encryptedData []byte, metadata string) (*models.Secret, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
+	return withAuth(c, func() (*models.Secret, error) {
+		ctx, cancel := c.getContext()
+		defer cancel()
 
-	ctx, cancel := c.getContext()
-	defer cancel()
+		resp, err := c.client.CreateSecret(ctx, &pb.CreateSecretRequest{
+			Name:          name,
+			DataType:      modelToProtoDataType(dataType),
+			EncryptedData: encryptedData,
+			Metadata:      metadata,
+		})
+		if err != nil {
+			return nil, err
+		}
 
-	resp, err := c.client.CreateSecret(ctx, &pb.CreateSecretRequest{
-		Name:          name,
-		DataType:      modelToProtoDataType(dataType),
-		EncryptedData: encryptedData,
-		Metadata:      metadata,
+		return protoToModelSecret(resp.Secret), nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return protoToModelSecret(resp.Secret), nil
 }
 
 func (c *Client) GetSecret(id string) (*models.Secret, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
+	return withAuth(c, func() (*models.Secret, error) {
+		ctx, cancel := c.getContext()
+		defer cancel()
 
-	ctx, cancel := c.getContext()
-	defer cancel()
+		resp, err := c.client.GetSecret(ctx, &pb.GetSecretRequest{
+			Id: id,
+		})
+		if err != nil {
+			return nil, err
+		}
 
-	resp, err := c.client.GetSecret(ctx, &pb.GetSecretRequest{
-		Id: id,
+		return protoToModelSecret(resp.Secret), nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return protoToModelSecret(resp.Secret), nil
 }
 
 func (c *Client) ListSecrets(dataType *models.DataType) ([]models.Secret, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
+	return withAuth(c, func() ([]models.Secret, error) {
+		ctx, cancel := c.getContext()
+		defer cancel()
 
-	ctx, cancel := c.getContext()
-	defer cancel()
+		req := &pb.ListSecretsRequest{}
+		if dataType != nil {
+			req.DataType = modelToProtoDataType(*dataType)
+		}
 
-	req := &pb.ListSecretsRequest{}
-	if dataType != nil {
-		req.DataType = modelToProtoDataType(*dataType)
-	}
+		resp, err := c.client.ListSecrets(ctx, req)
+		if err != nil {
+			return nil, err
+		}
 
-	resp, err := c.client.ListSecrets(ctx, req)
-	if err != nil {
-		return nil, err
-	}
+		secrets := make([]models.Secret, len(resp.Secrets))
+		for i, s := range resp.Secrets {
+			secrets[i] = *protoToModelSecret(s)
+		}
 
-	secrets := make([]models.Secret, len(resp.Secrets))
-	for i, s := range resp.Secrets {
-		secrets[i] = *protoToModelSecret(s)
-	}
-
-	return secrets, nil
+		return secrets, nil
+	})
 }
 
 func (c *Client) UpdateSecret(secret *models.Secret) (*models.Secret, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
+	return withAuth(c, func() (*models.Secret, error) {
+		ctx, cancel := c.getContext()
+		defer cancel()
 
-	ctx, cancel := c.getContext()
-	defer cancel()
+		resp, err := c.client.UpdateSecret(ctx, &pb.UpdateSecretRequest{
+			Id:              secret.ID,
+			Name:            secret.Name,
+			EncryptedData:   secret.EncryptedData,
+			Metadata:        secret.Metadata,
+			ExpectedVersion: secret.Version,
+		})
+		if err != nil {
+			return nil, err
+		}
 
-	resp, err := c.client.UpdateSecret(ctx, &pb.UpdateSecretRequest{
-		Id:              secret.ID,
-		Name:            secret.Name,
-		EncryptedData:   secret.EncryptedData,
-		Metadata:        secret.Metadata,
-		ExpectedVersion: secret.Version,
+		return protoToModelSecret(resp.Secret), nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	return protoToModelSecret(resp.Secret), nil
 }
 
 func (c *Client) DeleteSecret(id string) error {
-	if err := c.requireAuth(); err != nil {
+	return withAuthNoResult(c, func() error {
+		ctx, cancel := c.getContext()
+		defer cancel()
+
+		_, err := c.client.DeleteSecret(ctx, &pb.DeleteSecretRequest{
+			Id: id,
+		})
 		return err
-	}
-
-	ctx, cancel := c.getContext()
-	defer cancel()
-
-	_, err := c.client.DeleteSecret(ctx, &pb.DeleteSecretRequest{
-		Id: id,
 	})
-	return err
 }
 
 func (c *Client) Sync(lastSyncTime time.Time, localChanges []models.Secret) (*models.SyncResponse, error) {
-	if err := c.requireAuth(); err != nil {
-		return nil, err
-	}
+	return withAuth(c, func() (*models.SyncResponse, error) {
+		ctx, cancel := c.getContext()
+		defer cancel()
 
-	ctx, cancel := c.getContext()
-	defer cancel()
+		protoChanges := make([]*pb.Secret, len(localChanges))
+		for i, s := range localChanges {
+			protoChanges[i] = modelToProtoSecret(&s)
+		}
 
-	protoChanges := make([]*pb.Secret, len(localChanges))
-	for i, s := range localChanges {
-		protoChanges[i] = modelToProtoSecret(&s)
-	}
+		resp, err := c.client.Sync(ctx, &pb.SyncRequest{
+			LastSyncTime: lastSyncTime.Unix(),
+			LocalChanges: protoChanges,
+		})
+		if err != nil {
+			return nil, err
+		}
 
-	resp, err := c.client.Sync(ctx, &pb.SyncRequest{
-		LastSyncTime: lastSyncTime.Unix(),
-		LocalChanges: protoChanges,
+		updatedSecrets := make([]models.Secret, len(resp.UpdatedSecrets))
+		for i, s := range resp.UpdatedSecrets {
+			updatedSecrets[i] = *protoToModelSecret(s)
+		}
+
+		return &models.SyncResponse{
+			UpdatedSecrets: updatedSecrets,
+			DeletedIDs:     resp.DeletedIds,
+			ServerTime:     time.Unix(resp.ServerTime, 0),
+			HasConflicts:   resp.HasConflicts,
+		}, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	updatedSecrets := make([]models.Secret, len(resp.UpdatedSecrets))
-	for i, s := range resp.UpdatedSecrets {
-		updatedSecrets[i] = *protoToModelSecret(s)
-	}
-
-	return &models.SyncResponse{
-		UpdatedSecrets: updatedSecrets,
-		DeletedIDs:     resp.DeletedIds,
-		ServerTime:     time.Unix(resp.ServerTime, 0),
-		HasConflicts:   resp.HasConflicts,
-	}, nil
 }
 
 

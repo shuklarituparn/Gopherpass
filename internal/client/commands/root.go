@@ -1,3 +1,4 @@
+
 package commands
 
 import (
@@ -10,7 +11,6 @@ import (
 
 	"github.com/shuklarituparn/Gopherpass/internal/client/api"
 	"github.com/shuklarituparn/Gopherpass/internal/client/config"
-	"github.com/shuklarituparn/Gopherpass/internal/client/storage"
 	"github.com/shuklarituparn/Gopherpass/internal/crypto"
 	"github.com/shuklarituparn/Gopherpass/internal/models"
 )
@@ -61,28 +61,28 @@ type EncryptorProvider interface {
 
 type App struct {
 	Config    *config.Config
-	APIClient *api.Client
-	Storage   *storage.LocalStorage
-	Encryptor *crypto.Encryptor
+	APIClient APIClientProvider
+	Storage   StorageProvider
+	Encryptor EncryptorProvider
 }
 
-func (a *App) GetConfig() *config.Config {
+func (a *App) GetConfig() ConfigProvider {
 	return a.Config
 }
 
-func (a *App) GetAPIClient() *api.Client {
+func (a *App) GetAPIClient() APIClientProvider {
 	return a.APIClient
 }
 
-func (a *App) GetStorage() *storage.LocalStorage {
+func (a *App) GetStorage() StorageProvider {
 	return a.Storage
 }
 
-func (a *App) GetEncryptor() *crypto.Encryptor {
+func (a *App) GetEncryptor() EncryptorProvider {
 	return a.Encryptor
 }
 
-func (a *App) SetEncryptor(e *crypto.Encryptor) {
+func (a *App) SetEncryptor(e EncryptorProvider) {
 	a.Encryptor = e
 }
 
@@ -163,11 +163,6 @@ func initApp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	localStorage, err := storage.NewLocalStorage(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("failed to initialize local storage: %w", err)
-	}
-	app.Storage = localStorage
 
 	clientOpts := &api.ClientOptions{
 		Address:     cfg.ServerAddress,

@@ -51,18 +51,42 @@ type User struct {
 	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }
 
+func (u *User) GetID() any {
+	return u.ID
+}
+
+func (u *User) SetCreatedAt(t time.Time) {
+	u.CreatedAt = t
+}
+
+func (u *User) SetUpdatedAt(t time.Time) {
+	u.UpdatedAt = t
+}
+
 
 type Secret struct {
-	ID            string    `json:"id" db:"id"`
-	UserID        int64     `json:"user_id" db:"user_id"`
-	Name          string    `json:"name" db:"name"`
-	DataType      DataType  `json:"data_type" db:"data_type"`
-	EncryptedData []byte    `json:"encrypted_data" db:"encrypted_data"`
-	Metadata      string    `json:"metadata" db:"metadata"`
-	Version       int64     `json:"version" db:"version"`
-	CreatedAt     time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at" db:"updated_at"`
+	ID            string     `json:"id" db:"id"`
+	UserID        int64      `json:"user_id" db:"user_id"`
+	Name          string     `json:"name" db:"name"`
+	DataType      DataType   `json:"data_type" db:"data_type"`
+	EncryptedData []byte     `json:"encrypted_data" db:"encrypted_data"`
+	Metadata      string     `json:"metadata" db:"metadata"`
+	Version       int64      `json:"version" db:"version"`
+	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at" db:"updated_at"`
 	DeletedAt     *time.Time `json:"deleted_at,omitempty" db:"deleted_at"`
+}
+
+func (s *Secret) GetID() any {
+	return s.ID
+}
+
+func (s *Secret) SetCreatedAt(t time.Time) {
+	s.CreatedAt = t
+}
+
+func (s *Secret) SetUpdatedAt(t time.Time) {
+	s.UpdatedAt = t
 }
 
 type LoginPassword struct {

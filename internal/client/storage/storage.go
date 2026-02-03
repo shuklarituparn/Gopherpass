@@ -1,64 +1,123 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq" 
 
 	"github.com/shuklarituparn/Gopherpass/internal/models"
 )
 
 var (
-	ErrSecretNotFound = errors.New("secret not found")
-	ErrDatabaseError  = errors.New("database error")
+	ErrUserNotFound    = errors.New("user not found")
+	ErrUserExists      = errors.New("user already exists")
+	ErrSecretNotFound  = errors.New("secret not found")
+	ErrVersionConflict = errors.New("version conflict")
+	ErrDatabaseError   = errors.New("database error")
 )
 
-type LocalStorage struct {
-	db *sql.DB
+type UserRepository interface {
+	CreateUser(ctx context.Context, user *models.User) error
+	GetUserByLogin(ctx context.Context, login string) (*models.User, error)
+	GetUserByID(ctx context.Context, id int64) (*models.User, error)
 }
 
-func NewLocalStorage(dbPath string) (*LocalStorage, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on")
+type SecretRepository interface {
+	CreateSecret(ctx context.Context, secret *models.Secret) error
+	GetSecret(ctx context.Context, userID int64, secretID string) (*models.Secret, error)
+	GetSecretsByUser(ctx context.Context, userID int64) ([]models.Secret, error)
+	UpdateSecret(ctx context.Context, secret *models.Secret) error
+	DeleteSecret(ctx context.Context, userID int64, secretID string) error
+}
+
+type SyncRepository interface {
+	GetSecretsModifiedSince(ctx context.Context, userID int64, since time.Time) ([]models.Secret, error)
+	GetDeletedSecrets(ctx context.Context, userID int64, since time.Time) ([]string, error)
+}
+
+type HealthChecker interface {
+	Ping(ctx context.Context) error
+	Close() error
+}
+
+
+type Storage interface {
+	UserRepository
+	SecretRepository
+	SyncRepository
+	HealthChecker
+}
+
+
+type PostgresStorage struct {
+	db         *sql.DB
+	userRepo   *UserRepo
+	secretRepo *SecretRepo
+}
+
+
+func NewPostgresStorage(dsn string) (*PostgresStorage, error) {
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	storage := &LocalStorage{db: db}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	storage := &PostgresStorage{
+		db:         db,
+		userRepo:   NewUserRepo(db),
+		secretRepo: NewSecretRepo(db),
+	}
+
 	if err := storage.migrate(); err != nil {
-		db.Close()
 		return nil, err
 	}
 
 	return storage, nil
 }
 
-func (s *LocalStorage) migrate() error {
+func (s *PostgresStorage) UserRepository() *UserRepo {
+	return s.userRepo
+}
+
+func (s *PostgresStorage) SecretRepoGeneric() *SecretRepo {
+	return s.secretRepo
+}
+
+func (s *PostgresStorage) migrate() error {
 	migrations := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id BIGSERIAL PRIMARY KEY,
+			login VARCHAR(255) UNIQUE NOT NULL,
+			password_hash VARCHAR(255) NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
 		`CREATE TABLE IF NOT EXISTS secrets (
-			id TEXT PRIMARY KEY,
-			user_id INTEGER NOT NULL,
-			name TEXT NOT NULL,
+			id VARCHAR(36) PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name VARCHAR(255) NOT NULL,
 			data_type INTEGER NOT NULL,
-			encrypted_data BLOB NOT NULL,
+			encrypted_data BYTEA NOT NULL,
 			metadata TEXT DEFAULT '',
-			version INTEGER DEFAULT 1,
-			created_at DATETIME NOT NULL,
-			updated_at DATETIME NOT NULL,
-			deleted_at DATETIME,
-			synced INTEGER DEFAULT 0,
-			local_modified INTEGER DEFAULT 0
+			version BIGINT DEFAULT 1,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			deleted_at TIMESTAMP WITH TIME ZONE
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_secrets_synced ON secrets(synced)`,
-		`CREATE INDEX IF NOT EXISTS idx_secrets_modified ON secrets(local_modified)`,
-		`CREATE TABLE IF NOT EXISTS sync_state (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			last_sync_time DATETIME,
-			user_id INTEGER
-		)`,
-		`INSERT OR IGNORE INTO sync_state (id, last_sync_time) VALUES (1, NULL)`,
+		`CREATE INDEX IF NOT EXISTS idx_secrets_user_id ON secrets(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_secrets_updated_at ON secrets(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_secrets_user_updated ON secrets(user_id, updated_at)`,
 	}
 
 	for _, migration := range migrations {
@@ -70,283 +129,80 @@ func (s *LocalStorage) migrate() error {
 	return nil
 }
 
-func (s *LocalStorage) Close() error {
+func (s *PostgresStorage) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
+func (s *PostgresStorage) Close() error {
 	return s.db.Close()
 }
 
-func (s *LocalStorage) CreateSecret(secret *models.Secret) error {
-	if secret.ID == "" {
-		secret.ID = uuid.New().String()
-	}
 
-	now := time.Now()
-	secret.CreatedAt = now
-	secret.UpdatedAt = now
-	secret.Version = 1
-
-	query := `
-		INSERT INTO secrets (id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, synced, local_modified)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)`
-
-	_, err := s.db.Exec(query,
-		secret.ID, secret.UserID, secret.Name, secret.DataType,
-		secret.EncryptedData, secret.Metadata, secret.Version,
-		secret.CreatedAt, secret.UpdatedAt,
-	)
-
-	return err
+func (s *PostgresStorage) CreateUser(ctx context.Context, user *models.User) error {
+	return s.userRepo.Create(ctx, user)
 }
 
-func (s *LocalStorage) GetSecret(id string) (*models.Secret, error) {
-	query := `
-		SELECT id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at
-		FROM secrets
-		WHERE id = ? AND deleted_at IS NULL`
 
-	secret := &models.Secret{}
-	err := s.db.QueryRow(query, id).Scan(
-		&secret.ID, &secret.UserID, &secret.Name, &secret.DataType,
-		&secret.EncryptedData, &secret.Metadata, &secret.Version,
-		&secret.CreatedAt, &secret.UpdatedAt, &secret.DeletedAt,
-	)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrSecretNotFound
-		}
-		return nil, err
-	}
-
-	return secret, nil
+func (s *PostgresStorage) GetUserByLogin(ctx context.Context, login string) (*models.User, error) {
+	return s.userRepo.GetByLogin(ctx, login)
 }
 
-func (s *LocalStorage) GetAllSecrets() ([]models.Secret, error) {
-	query := `
-		SELECT id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at
-		FROM secrets
-		WHERE deleted_at IS NULL
-		ORDER BY updated_at DESC`
 
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var secrets []models.Secret
-	for rows.Next() {
-		var secret models.Secret
-		if err := rows.Scan(
-			&secret.ID, &secret.UserID, &secret.Name, &secret.DataType,
-			&secret.EncryptedData, &secret.Metadata, &secret.Version,
-			&secret.CreatedAt, &secret.UpdatedAt, &secret.DeletedAt,
-		); err != nil {
-			return nil, err
-		}
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+func (s *PostgresStorage) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
+	return s.userRepo.GetByID(ctx, id)
 }
 
-func (s *LocalStorage) GetSecretsByType(dataType models.DataType) ([]models.Secret, error) {
-	query := `
-		SELECT id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at
-		FROM secrets
-		WHERE data_type = ? AND deleted_at IS NULL
-		ORDER BY updated_at DESC`
 
-	rows, err := s.db.Query(query, dataType)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var secrets []models.Secret
-	for rows.Next() {
-		var secret models.Secret
-		if err := rows.Scan(
-			&secret.ID, &secret.UserID, &secret.Name, &secret.DataType,
-			&secret.EncryptedData, &secret.Metadata, &secret.Version,
-			&secret.CreatedAt, &secret.UpdatedAt, &secret.DeletedAt,
-		); err != nil {
-			return nil, err
-		}
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+func (s *PostgresStorage) CreateSecret(ctx context.Context, secret *models.Secret) error {
+	return s.secretRepo.Create(ctx, secret)
 }
 
-func (s *LocalStorage) UpdateSecret(secret *models.Secret) error {
-	secret.UpdatedAt = time.Now()
 
-	query := `
-		UPDATE secrets
-		SET name = ?, encrypted_data = ?, metadata = ?, version = version + 1, updated_at = ?, local_modified = 1
-		WHERE id = ? AND deleted_at IS NULL`
-
-	result, err := s.db.Exec(query,
-		secret.Name, secret.EncryptedData, secret.Metadata, secret.UpdatedAt, secret.ID,
-	)
-	if err != nil {
-		return err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return ErrSecretNotFound
-	}
-
-	return nil
+func (s *PostgresStorage) GetSecret(ctx context.Context, userID int64, secretID string) (*models.Secret, error) {
+	return s.secretRepo.GetByIDForUser(ctx, userID, secretID)
 }
 
-func (s *LocalStorage) DeleteSecret(id string) error {
-	query := `
-		UPDATE secrets
-		SET deleted_at = ?, updated_at = ?, local_modified = 1
-		WHERE id = ? AND deleted_at IS NULL`
 
-	now := time.Now()
-	result, err := s.db.Exec(query, now, now, id)
-	if err != nil {
-		return err
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rowsAffected == 0 {
-		return ErrSecretNotFound
-	}
-
-	return nil
+func (s *PostgresStorage) GetSecretsByUser(ctx context.Context, userID int64) ([]models.Secret, error) {
+	return s.secretRepo.ListByUser(ctx, userID)
 }
 
-func (s *LocalStorage) GetLocallyModifiedSecrets() ([]models.Secret, error) {
-	query := `
-		SELECT id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at
-		FROM secrets
-		WHERE local_modified = 1`
 
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var secrets []models.Secret
-	for rows.Next() {
-		var secret models.Secret
-		if err := rows.Scan(
-			&secret.ID, &secret.UserID, &secret.Name, &secret.DataType,
-			&secret.EncryptedData, &secret.Metadata, &secret.Version,
-			&secret.CreatedAt, &secret.UpdatedAt, &secret.DeletedAt,
-		); err != nil {
-			return nil, err
-		}
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+func (s *PostgresStorage) GetSecretsModifiedSince(ctx context.Context, userID int64, since time.Time) ([]models.Secret, error) {
+	return s.secretRepo.ListModifiedSince(ctx, userID, since)
 }
 
-func (s *LocalStorage) MarkAsSynced(id string) error {
-	query := `UPDATE secrets SET synced = 1, local_modified = 0 WHERE id = ?`
-	_, err := s.db.Exec(query, id)
-	return err
+
+func (s *PostgresStorage) UpdateSecret(ctx context.Context, secret *models.Secret) error {
+	return s.secretRepo.Update(ctx, secret)
 }
 
-func (s *LocalStorage) UpsertSecret(secret *models.Secret) error {
-	query := `
-		INSERT INTO secrets (id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at, synced, local_modified)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name,
-			encrypted_data = excluded.encrypted_data,
-			metadata = excluded.metadata,
-			version = excluded.version,
-			updated_at = excluded.updated_at,
-			deleted_at = excluded.deleted_at,
-			synced = 1,
-			local_modified = 0`
 
-	_, err := s.db.Exec(query,
-		secret.ID, secret.UserID, secret.Name, secret.DataType,
-		secret.EncryptedData, secret.Metadata, secret.Version,
-		secret.CreatedAt, secret.UpdatedAt, secret.DeletedAt,
-	)
-
-	return err
+func (s *PostgresStorage) DeleteSecret(ctx context.Context, userID int64, secretID string) error {
+	return s.secretRepo.DeleteForUser(ctx, userID, secretID)
 }
 
-func (s *LocalStorage) DeleteSecretPermanently(id string) error {
-	query := `DELETE FROM secrets WHERE id = ?`
-	_, err := s.db.Exec(query, id)
-	return err
+
+func (s *PostgresStorage) GetDeletedSecrets(ctx context.Context, userID int64, since time.Time) ([]string, error) {
+	return s.secretRepo.ListDeletedSince(ctx, userID, since)
 }
 
-func (s *LocalStorage) GetLastSyncTime() (time.Time, error) {
-	var lastSyncTime sql.NullTime
-	query := `SELECT last_sync_time FROM sync_state WHERE id = 1`
-	err := s.db.QueryRow(query).Scan(&lastSyncTime)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if !lastSyncTime.Valid {
-		return time.Time{}, nil
-	}
-	return lastSyncTime.Time, nil
+func isUniqueViolation(err error) bool {
+	return err != nil && (
+		containsString(err.Error(), "23505") ||
+			containsString(err.Error(), "unique constraint") ||
+			containsString(err.Error(), "duplicate key"))
 }
 
-func (s *LocalStorage) SetLastSyncTime(t time.Time) error {
-	query := `UPDATE sync_state SET last_sync_time = ? WHERE id = 1`
-	_, err := s.db.Exec(query, t)
-	return err
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
 }
 
-func (s *LocalStorage) ClearAll() error {
-	queries := []string{
-		`DELETE FROM secrets`,
-		`UPDATE sync_state SET last_sync_time = NULL, user_id = NULL`,
-	}
-	for _, query := range queries {
-		if _, err := s.db.Exec(query); err != nil {
-			return err
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
 		}
 	}
-	return nil
-}
-
-func (s *LocalStorage) SearchSecrets(query string) ([]models.Secret, error) {
-	sqlQuery := `
-		SELECT id, user_id, name, data_type, encrypted_data, metadata, version, created_at, updated_at, deleted_at
-		FROM secrets
-		WHERE name LIKE ? AND deleted_at IS NULL
-		ORDER BY updated_at DESC`
-
-	rows, err := s.db.Query(sqlQuery, "%"+query+"%")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var secrets []models.Secret
-	for rows.Next() {
-		var secret models.Secret
-		if err := rows.Scan(
-			&secret.ID, &secret.UserID, &secret.Name, &secret.DataType,
-			&secret.EncryptedData, &secret.Metadata, &secret.Version,
-			&secret.CreatedAt, &secret.UpdatedAt, &secret.DeletedAt,
-		); err != nil {
-			return nil, err
-		}
-		secrets = append(secrets, secret)
-	}
-
-	return secrets, rows.Err()
+	return false
 }
