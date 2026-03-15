@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package gophkeeper;
+
+option go_package = "github.com/shuklarituparn/gophkeeper/pkg/proto";
+
+// GophKeeper service provides secure storage for passwords and other sensitive data.
+service GophKeeper {
+  // Register creates a new user account.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Login authenticates a user and returns an access token.
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // CreateSecret stores a new encrypted secret.
+  rpc CreateSecret(CreateSecretRequest) returns (CreateSecretResponse);
+
+  // GetSecret retrieves a specific secret by ID.
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+
+  // ListSecrets retrieves all secrets for the authenticated user.
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+
+  // UpdateSecret updates an existing secret.
+  rpc UpdateSecret(UpdateSecretRequest) returns (UpdateSecretResponse);
+
+  // DeleteSecret removes a secret.
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+
+  // Sync synchronizes secrets between client and server.
+  rpc Sync(SyncRequest) returns (SyncResponse);
+}
+
+// DataType represents the type of stored secret.
+enum DataType {
+  DATA_TYPE_UNSPECIFIED = 0;
+  DATA_TYPE_LOGIN_PASSWORD = 1;
+  DATA_TYPE_TEXT = 2;
+  DATA_TYPE_BINARY = 3;
+  DATA_TYPE_CARD = 4;
+}
+
+// RegisterRequest contains user registration data.
+message RegisterRequest {
+  string login = 1;
+  string password = 2;
+}
+
+// RegisterResponse contains the result of registration.
+message RegisterResponse {
+  int64 user_id = 1;
+  string token = 2;
+}
+
+// LoginRequest contains user authentication data.
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+}
+
+// LoginResponse contains the authentication result.
+message LoginResponse {
+  string token = 1;
+  int64 expires_at = 2;  // Unix timestamp
+  int64 user_id = 3;
+}
+
+// Secret represents an encrypted secret.
+message Secret {
+  string id = 1;
+  int64 user_id = 2;
+  string name = 3;
+  DataType data_type = 4;
+  bytes encrypted_data = 5;
+  string metadata = 6;
+  int64 version = 7;
+  int64 created_at = 8;  // Unix timestamp
+  int64 updated_at = 9;  // Unix timestamp
+  bool deleted = 10;
+}
+
+// CreateSecretRequest contains data for creating a new secret.
+message CreateSecretRequest {
+  string name = 1;
+  DataType data_type = 2;
+  bytes encrypted_data = 3;
+  string metadata = 4;
+}
+
+// CreateSecretResponse contains the created secret.
+message CreateSecretResponse {
+  Secret secret = 1;
+}
+
+// GetSecretRequest contains the secret ID to retrieve.
+message GetSecretRequest {
+  string id = 1;
+}
+
+// GetSecretResponse contains the requested secret.
+message GetSecretResponse {
+  Secret secret = 1;
+}
+
+// ListSecretsRequest contains optional filters for listing secrets.
+message ListSecretsRequest {
+  DataType data_type = 1;  // Optional filter by type
+  int64 since = 2;  // Optional: only return secrets modified after this timestamp
+}
+
+// ListSecretsResponse contains the list of secrets.
+message ListSecretsResponse {
+  repeated Secret secrets = 1;
+}
+
+// UpdateSecretRequest contains data for updating a secret.
+message UpdateSecretRequest {
+  string id = 1;
+  string name = 2;
+  bytes encrypted_data = 3;
+  string metadata = 4;
+  int64 expected_version = 5;  // For optimistic locking
+}
+
+// UpdateSecretResponse contains the updated secret.
+message UpdateSecretResponse {
+  Secret secret = 1;
+}
+
+// DeleteSecretRequest contains the secret ID to delete.
+message DeleteSecretRequest {
+  string id = 1;
+}
+
+// DeleteSecretResponse is empty on success.
+message DeleteSecretResponse {}
+
+// SyncRequest contains the client's sync state.
+message SyncRequest {
+  int64 last_sync_time = 1;  // Unix timestamp of last sync
+  repeated Secret local_changes = 2;  // Secrets changed on client since last sync
+  string client_version = 3;
+}
+
+// SyncResponse contains the server's response to sync.
+message SyncResponse {
+  repeated Secret updated_secrets = 1;  // Secrets to update on client
+  repeated string deleted_ids = 2;  // IDs of secrets deleted on server
+  int64 server_time = 3;  // Current server time (for next sync)
+  bool has_conflicts = 4;  // Whether there were conflicts
+  repeated SyncConflict conflicts = 5;  // Detailed conflict info
+}
+
+// SyncConflict represents a conflict between client and server versions.
+message SyncConflict {
+  string secret_id = 1;
+  Secret client_version = 2;
+  Secret server_version = 3;
+}
